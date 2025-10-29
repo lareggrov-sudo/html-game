@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cosmic Collector - HTML5 Canvas Game</title>
+
+<style>
+/* --- CSS STYLES --- */
+body {
+display: flex;
+flex-direction: column;
+align-items: center;
+justify-content: center;
+height: 100vh;
+margin: 0;
+background-color: #000000;
+color: #FFFFFF;
+font-family: 'Arial', sans-serif;
+overflow: hidden; /* Prevent scrollbar from appearing due to admin panel */
+}
+#gameCanvas {
+border: 2px solid #555555;
+background-color: #000000;
+}
+#gameUI {
+position: absolute;
+top: 20px;
+left: 20px;
+font-size: 1.2em;
+color: #00FFFF;
+z-index: 10;
+}
+#gameOverScreen {
+position: absolute;
+display: none;
+flex-direction: column;
+align-items: center;
+justify-content: center;
+width: 800px;
+height: 600px;
+background-color: rgba(0, 0, 0, 0.85);
+z-index: 20;
+}
+#gameOverScreen h1 {
+font-size: 4em;
+color: #FF4500; /* Orange-Red */
+}
+#gameOverScreen p {
+font-size: 1.8em;
+color: #FFFFFF;
+}
+#restartButton {
+margin-top: 20px;
+padding: 10px 20px;
+font-size: 1.5em;
+cursor: pointer;
+background-color: #1E90FF; /* Deep Blue */
+color: white;
+border: none;
+border-radius: 5px;
+}
+
+/* --- Admin Panel CSS --- */
+#adminPanel {
+position: fixed;
+bottom: 0;
+left: 0;
+width: 320px;
+padding: 10px;
+background-color: #333;
+color: #FFF;
+border-top: 2px solid lime;
+font-size: 0.8em;
+z-index: 100;
+display: none; /* Hidden by default */
+opacity: 0.95;
+flex-direction: column;
+}
+#adminPanel h2 {
+margin-top: 0;
+color: lime;
+}
+#adminPanel button {
+margin: 5px 2px;
+padding: 5px;
+cursor: pointer;
+}
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+
+<div id="gameUI">
+<p>SCORE: <span id="scoreDisplay">0</span></p>
+<p>HIGH SCORE: <span id="highScoreDisplay">0</span></p>
+</div>
+
+<div id="gameOverScreen">
+<h1 id="gameOverTitle">GAME OVER</h1>
+<p>FINAL SCORE: <span id="finalScoreDisplay">0</span></p>
+<p id="highScoreStatus"></p>
+<button id="restartButton">PLAY AGAIN</button>
+</div>
+
+<div id="adminPanel">
+<h2>ADMIN / DEBUG (Press 'P' to Toggle)</h2>
+<p>State: <span id="debugState">ready</span> | Shield: <span id="debugShield">No</span></p>
+
+<label for="speedSlider">Asteroid Speed Multiplier:</label>
+<input type="range" id="speedSlider" min="0.1" max="3" value="1" step="0.1">
+<span id="speedValue">1.0x</span><br>
+
+<label for="scoreInput">Set Score:</label>
+<input type="number" id="scoreInput" value="0" min="0" style="width: 80px;">
+<button id="setScoreButton">Set</button><br>
+
+<button id="spawnShieldButton">Spawn Shield</button>
+<button id="spawnSlowMoButton">Spawn SlowMo</button>
+<button id="killShipButton">Die Now</button>
+</div>
+
+<script>
+// --- JAVASCRIPT GAME LOGIC ---
+
+// 1. Setup and Constants
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+let gameState = 'ready';
+let score = 0;
+let currentHighScore = 0;
+let keys = { up: false, down: false, left: false, right: false };
+
+const S_SPEED = 5;
+const SHIP_RADIUS = 12;
+
+let asteroids = [];
+let powerUps = [];
+let powerUpCooldown = 60 * 3; // Initial cooldown (3 seconds)
+
+// UI elements
+const scoreDisplay = document.getElementById('scoreDisplay');
+const highScoreDisplay = document.getElementById('highScoreDisplay');
+const gameOverScreen = document.getElementById('gameOverScreen');
+const finalScoreDisplay = document.getElementById('finalScoreDisplay');
+const highScoreStatus = document.getElementById('highScoreStatus');
+const restartButton = document.getElementById('restartButton');
+
+// Admin Panel Elements
+const adminPanel = document.getElementById('adminPanel');
+const debugState = document.getElementById('debugState');
+const debugShield = document.getElementById('debugShield');
+const speedSlider = document.getElementById('speedSlider');
+const speedValue = document.getElementById('speedValue');
+const scoreInput = document.getElementById('scoreInput');
+const setScoreButton = document.getElementById('setScoreButton');
+const spawnShieldButton = document.getElementById('spawnShieldButton');
+const spawnSlowMoButton = document.getElementById('spawnSlowMoButton');
+const killShipButton = document.getElementById('killShipButton');
+
+// --- Class Definitions ---
+
+class Ship {
+constructor(startX, startY) {
+this.x = startX;
+this.y = startY;
+this.radius = SHIP_RADIUS;
+this.speed = S_SPEED;
+this.isShielded = false;
+this.shieldTimer = 0;
+}
+
+updateMovement() {
+if (keys.up) this.y -= this.speed;
+if (keys.down) this.y += this.speed;
+if (keys.left) this.x -= this.speed;
+if (keys.right) this.x += this.speed;
+
+// Boundary checking
+this.x = Math.max(this.radius, Math.min(W - this.radius, this.x));
+this.y = Math.max(this.radius, Math.min(H - this.radius, this.y));
+}
+
+draw(ctx) {
+// Draw the Cyan Triangle (Ship)
+ctx.fillStyle = '#00FFFF'; // Cyan
+ctx.beginPath();
+ctx.moveTo(this.x + 12, this.y);
+ctx.lineTo(this.x - 12, this.y + 10);
+ctx.lineTo(this.x - 12, this.y - 10);
+ctx.closePath();
+ctx.fill();
+
+// Draw Shield if active
+if (this.isShielded) {
+ctx.strokeStyle = 'lime';
+ctx.lineWidth = 3;
+ctx.beginPath();
+ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2);
+ctx.stroke();
+}
+}
+}
+
+class Asteroid {
+constructor() {
+this.radius = (Math.random() * 20) + 10;
+this.x = W + this.radius;
+this.y = Math.random() * H;
+this.initialVelocity = -(Math.random() * 2) - 1.5;
+this.angle = 0;
+this.rotation = (Math.random() * 0.05) - 0.025;
+}
+
+update(speedMultiplier) {
+// Apply the speed multiplier from the admin panel
+this.x += this.initialVelocity * speedMultiplier;
+this.angle += this.rotation;
+}
+
+draw(ctx) {
+ctx.save();
+ctx.translate(this.x, this.y);
+ctx.rotate(this.angle);
+
+ctx.fillStyle = '#444444';
+ctx.beginPath();
+ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+ctx.fill();
+
+ctx.restore();
+}
+}
+
+class PowerUp {
+constructor(type) {
+this.type = type;
+this.radius = 8;
+this.x = W + 50;
+this.y = Math.random() * H;
+this.velocity = -3;
+this.lifetime = 60 * 4;
+this.frame = 0;
+}
+
+update() {
+this.x += this.velocity;
+this.frame++;
+return this.frame <= this.lifetime && this.x > -this.radius;
+}
+
+draw(ctx) {
+let color;
+if (this.type === 'Shield') color = 'lime';
+else if (this.type === 'SlowMo') color = 'deepskyblue';
+else if (this.type === 'SuperOrb') color = 'red';
+else color = 'yellow';
+
+ctx.fillStyle = color;
+ctx.beginPath();
+ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+ctx.fill();
+}
+}
+
+// --- Game State and Control Functions ---
+
+const ship = new Ship(W / 4, H / 2);
+
+function loadHighScore() {
+const storedScore = localStorage.getItem('cosmicCollectorHighScore');
+if (storedScore) {
+currentHighScore = parseInt(storedScore);
+}
+highScoreDisplay.textContent = currentHighScore;
+}
+
+function saveScore(newScore) {
+if (newScore > currentHighScore) {
+currentHighScore = newScore;
+localStorage.setItem('cosmicCollectorHighScore', currentHighScore);
+highScoreDisplay.textContent = currentHighScore;
+return true;
+}
+return false;
+}
+
+function addScore(points) {
+score += points;
+scoreDisplay.textContent = score;
+}
+
+function checkCollision(obj1, obj2) {
+const dx = obj2.x - obj1.x;
+const dy = obj2.y - obj1.y;
+const combinedRadii = obj1.radius + obj2.radius;
+return (dx * dx) + (dy * dy) < (combinedRadii * combinedRadii);
+}
+
+function spawnLogic() {
+// Asteroid Spawning
+if (Math.random() < 0.015) {
+asteroids.push(new Asteroid());
+}
+
+// Power-Up Spawning
+if (powerUpCooldown > 0) {
+powerUpCooldown--;
+} else {
+if (Math.random() < 0.02) {
+spawnRandomPowerUp();
+powerUpCooldown = 60 * 5;
+}
+}
+}
+
+function spawnRandomPowerUp() {
+const totalWeight = 8;
+const randomNumber = Math.random() * totalWeight;
+let selectedType;
+
+if (randomNumber < 4) selectedType = 'Shield';
+else if (randomNumber < 7) selectedType = 'SlowMo';
+else selectedType = 'SuperOrb';
+
+powerUps.push(new PowerUp(selectedType));
+}
+
+function handleCollisions() {
+// Ship vs. Asteroids
+asteroids = asteroids.filter(asteroid => {
+if (checkCollision(ship, asteroid)) {
+if (ship.isShielded) {
+ship.isShielded = false;
+ship.shieldTimer = 0;
+return false;
+} else {
+gameOver();
+return false;
+}
+}
+return true;
+});
+
+// Ship vs. PowerUps
+powerUps = powerUps.filter(powerUp => {
+if (checkCollision(ship, powerUp)) {
+// Apply Power-Up Effect
+if (powerUp.type === 'Shield') {
+ship.isShielded = true;
+ship.shieldTimer = 60 * 5; // 5 seconds
+} else if (powerUp.type === 'SlowMo') {
+// Logic to slow asteroids is now tied to the speed slider / manual setting for simplicity
+} else if (powerUp.type === 'SuperOrb') {
+addScore(1000);
+asteroids.length = 0; // Clear screen
+}
+return false;
+}
+return true;
+});
+}
+
+function gameOver() {
+if (gameState !== 'playing') return; // Prevent multiple calls
+gameState = 'gameover';
+
+// Score Display
+finalScoreDisplay.textContent = score;
+const isNewHigh = saveScore(score);
+
+if (isNewHigh) {
+highScoreStatus.textContent = "NEW HIGH SCORE!";
+highScoreStatus.style.color = 'gold';
+} else {
+highScoreStatus.textContent = `Your Best: ${currentHighScore}`;
+highScoreStatus.style.color = 'white';
+}
+
+// Show Game Over Screen
+gameOverScreen.style.display = 'flex';
+}
+
+// --- Admin Panel Update ---
+function updateAdminPanel() {
+debugState.textContent = gameState.toUpperCase();
+// Display remaining shield time
+debugShield.textContent = ship.isShielded ? 'YES (' + Math.ceil(ship.shieldTimer / 60) + 's)' : 'No';
+
+const multiplier = parseFloat(speedSlider.value);
+speedValue.textContent = multiplier.toFixed(1) + 'x';
+
+// Ensure the input field reflects the current score when opening the panel
+scoreInput.value = score;
+}
+
+// --- Main Game Loop Functions ---
+
+function update() {
+const speedMultiplier = parseFloat(speedSlider.value);
+
+ship.updateMovement();
+spawnLogic();
+handleCollisions();
+
+// Update objects with speed multiplier
+asteroids = asteroids.filter(a => {
+a.update(speedMultiplier);
+return a.x > -a.radius;
+});
+powerUps = powerUps.filter(p => p.update());
+
+// Shield Timer update
+if (ship.shieldTimer > 0) {
+ship.shieldTimer--;
+if (ship.shieldTimer === 0) {
+ship.isShielded = false;
+}
+}
+
+// Increase score slightly over time for survival
+addScore(1);
+
+updateAdminPanel(); // Update debug information
+}
+
+function draw() {
+// A. Clear Canvas
+ctx.fillStyle = '#000000';
+ctx.fillRect(0, 0, W, H);
+
+// B. Draw Objects
+asteroids.forEach(a => a.draw(ctx));
+powerUps.forEach(p => p.draw(ctx));
+ship.draw(ctx);
+}
+
+let animationFrameId;
+
+function gameLoop() {
+if (gameState === 'playing') {
+update();
+draw();
+animationFrameId = requestAnimationFrame(gameLoop);
+}
+}
+
+function resetGame() {
+score = 0;
+scoreDisplay.textContent = 0;
+asteroids.length = 0;
+powerUps.length = 0;
+ship.x = W / 4;
+ship.y = H / 2;
+ship.isShielded = false;
+ship.shieldTimer = 0;
+powerUpCooldown = 60 * 3;
+gameOverScreen.style.display = 'none';
+if (animationFrameId) {
+cancelAnimationFrame(animationFrameId);
+}
+}
+
+function startGame() {
+resetGame();
+gameState = 'playing';
+gameLoop();
+}
+
+// --- Input and Event Listeners ---
+
+document.addEventListener('keydown', (e) => {
+if (e.key === 'ArrowUp') keys.up = true;
+if (e.key === 'ArrowDown') keys.down = true;
+if (e.key === 'ArrowLeft') keys.left = true;
+if (e.key === 'ArrowRight') keys.right = true;
+});
+
+document.addEventListener('keyup', (e) => {
+if (e.key === 'ArrowUp') keys.up = false;
+if (e.key === 'ArrowDown') keys.down = false;
+if (e.key === 'ArrowLeft') keys.left = false;
+if (e.key === 'ArrowRight') keys.right = false;
+
+// Admin Panel Toggle (Press 'P' key)
+if (e.key === 'p' || e.key === 'P') {
+adminPanel.style.display = adminPanel.style.display === 'flex' ? 'none' : 'flex';
+}
+});
+
+restartButton.addEventListener('click', startGame);
+
+// Admin Button Actions
+setScoreButton.addEventListener('click', () => {
+const newScore = parseInt(scoreInput.value);
+if (!isNaN(newScore)) {
+score = newScore;
+scoreDisplay.textContent = score;
+}
+});
+
+spawnShieldButton.addEventListener('click', () => {
+powerUps.push(new PowerUp('Shield'));
+});
+
+spawnSlowMoButton.addEventListener('click', () => {
+powerUps.push(new PowerUp('SlowMo'));
+});
+
+killShipButton.addEventListener('click', () => {
+if (gameState === 'playing') {
+gameOver();
+}
+});
+
+// Initial loading sequence
+loadHighScore();
+startGame();
+
+</script>
+</body>
+</html>
